@@ -2,21 +2,47 @@
 # This software may be used and distributed according to the terms of the Llama 2 Community License Agreement.
 
 from typing import Optional
-
+import pandas as pd
 import fire
-
+import re
 from llama import Llama
+from tqdm import tqdm
 
+def load_dialogs(path: str):
+    data = pd.read_json(path, lines=True)
+    dialogs = []
+    prompts = []
+    for elem in data.iterrows():
+        cur_dial = []
+        prompt = elem[1].prompt
+        if "User:" not in prompt:
+            cur_dial.append({"role": "user", "content": prompt})
+        else:
+            user_turns = re.findall("User:(.*?)\nChatbot:", prompt, re.DOTALL)
+            chatbot_turns = re.findall("Chatbot:(.*?)\nUser:", prompt, re.DOTALL)
+            for user_turn, chatbot_turn in zip(user_turns, chatbot_turns):
+                cur_dial.append({"role": "user", "content": user_turn.strip()})
+                cur_dial.append({"role": "assistant", "content": chatbot_turn.strip()})
+            cur_dial.append({"role": "user", "content": user_turns[-1]})
+            
+        prompts.append(prompt)
+        dialogs.append(cur_dial)
+    return dialogs, prompts
+        
 
 def main(
     ckpt_dir: str,
     tokenizer_path: str,
+    prompts_path: str,        
     temperature: float = 0.6,
     top_p: float = 0.9,
-    max_seq_len: int = 512,
-    max_batch_size: int = 4,
+    max_seq_len: int = 4096,
+    max_batch_size: int = 8,
+    subset: int = 1000000,
     max_gen_len: Optional[int] = None,
 ):
+
+
     generator = Llama.build(
         ckpt_dir=ckpt_dir,
         tokenizer_path=tokenizer_path,
@@ -24,6 +50,8 @@ def main(
         max_batch_size=max_batch_size,
     )
 
+    
+    '''
     dialogs = [
         [{"role": "user", "content": "what is the recipe of mayonnaise?"}],
         [
@@ -53,21 +81,26 @@ These are just a few of the many attractions that Paris has to offer. With so mu
             {"role": "user", "content": "How to go from Beijing to NY?"},
         ],
     ]
-    results = generator.chat_completion(
-        dialogs,  # type: ignore
-        max_gen_len=max_gen_len,
-        temperature=temperature,
-        top_p=top_p,
-    )
-
-    for dialog, result in zip(dialogs, results):
-        for msg in dialog:
-            print(f"{msg['role'].capitalize()}: {msg['content']}\n")
-        print(
-            f"> {result['generation']['role'].capitalize()}: {result['generation']['content']}"
+    '''
+    
+    dialogs, prompts = load_dialogs(prompts_path)
+    dialogs, prompts = dialogs[:subset], prompts[:subset]
+    results = []
+    for i in tqdm(range(0, len(dialogs), max_batch_size)):
+        results += generator.chat_completion(
+            dialogs[i: i + max_batch_size],  # type: ignore
+            max_gen_len=max_gen_len,
+            temperature=temperature,
+            top_p=top_p,
         )
-        print("\n==================================\n")
 
+    new_data = []
+    for prompt, result in zip(prompts, results):
+        new_data.append({"prompt": prompt, "completion": result['generation']['content'].strip()})
+        
+    df = pd.DataFrame(new_data)
+    with open(prompts_path + f"_{ckpt_dir.split('/')[-1]}" +  '_out', "w") as f:
+        f.write(df.to_json(orient='records', lines=True, force_ascii=False))
 
 if __name__ == "__main__":
     fire.Fire(main)
