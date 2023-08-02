@@ -266,6 +266,8 @@ class Llama:
                 bos=True,
                 eos=False,
             )
+            # Limit the input len to 4096
+            dialog_tokens = dialog_tokens[:4096]
             prompt_tokens.append(dialog_tokens)
 
         generation_tokens, generation_logprobs = self.generate(
